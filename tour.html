@@ -994,7 +994,10 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
       r.tunesets.forEach(addTs);
     }
     (item.tunesets || []).forEach(addTs);
-    for (const [rx, m] of WORDS) if (rx.test(`${item.name} ${item.desc}`)) touches.add(m);
+    // Words only from the tooltip: part and trait names are flavour ("Extra Fuel" grants Surge, not fuel).
+    // Ability names are the mechanic itself (Surge, Shield), so those count.
+    const text = item.level ? `${item.name} ${item.desc}` : item.desc;
+    for (const [rx, m] of WORDS) if (rx.test(text || '')) touches.add(m);
     needs.forEach((m) => touches.add(m)); gives.forEach((m) => touches.add(m));
     return { needs, gives, touches };
   }
@@ -1029,25 +1032,38 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
     }
 
     const TIER = { Common: 0, Rare: 1, Epic: 2, Legendary: 3, Faulty: -3 };
-    // Score one offer: shared focus, plus extra when it feeds a trigger the build relies on or pays off what it produces.
+    // Score one offer as (how much the build wants what it GIVES) × (how often the build sets off what it NEEDS).
+    // A part whose trigger fits but whose payoff the build doesn't care about (e.g. a shield for a speed build)
+    // scores low; so does a great payoff behind a trigger the build rarely hits.
     function score(kind, id, build, prof = profile(build)) {
-      const t = tagsOf(kind, id), why = [];
-      let s = 0;
-      t.touches.forEach((m) => { s += prof.w[m] || 0; });
-      t.gives.forEach((m) => { const v = (prof.needW[m] || 0) * 1.5; if (v) { s += v; why.push({ v, text: `Gives ${LABEL[m]}, which your build triggers on` }); } });
-      t.needs.forEach((m) => { const v = (prof.giveW[m] || 0) * 1.5; if (v) { s += v; why.push({ v, text: `Triggers on ${LABEL[m]}, which your build produces` }); } });
-      const shared = [...t.touches].filter((m) => prof.w[m]).sort((a, b) => prof.w[b] - prof.w[a]);
-      if (shared.length) why.push({ v: prof.w[shared[0]], text: `Fits your ${shared.slice(0, 2).map((m) => LABEL[m]).join(' and ')} focus` });
+      const t = tagsOf(kind, id);
+      const does = (m) => (prof.giveW[m] || 0) + (prof.w[m] || 0) * 0.5;      // how often the build sets this off
+      const wants = (m) => (prof.w[m] || 0) + (prof.needW[m] || 0) * 1.5;    // how much the build wants this
+      // payoff: what the rules grant, plus what the tooltip says it boosts (e.g. "increase Speed"), minus its own trigger
+      const payoffs = [...new Set([...t.gives, ...[...t.touches].filter((m) => !t.needs.has(m))])];
+      let pay = 0, topPay = null;
+      for (const m of payoffs) { const v = wants(m); pay += v; if (v && (!topPay || v > wants(topPay))) topPay = m; }
+      let trig = 1, topNeed = null;
+      if (t.needs.size) {
+        topNeed = [...t.needs].sort((a, b) => does(b) - does(a))[0];
+        trig = Math.min(1.25, 0.2 + does(topNeed) / 6);
+      }
+      let s = trig * pay, reason;
+      if (!topPay) reason = 'Adds little to this build';
+      else if (topNeed && does(topNeed) > 0) reason = topNeed === topPay ? `Strengthens your ${LABEL[topPay]} loop` : `Turns your ${LABEL[topNeed]} into ${LABEL[topPay]}`;
+      else if (topNeed) reason = `${LABEL[topPay]} fits, but it needs ${LABEL[topNeed]}, which your build rarely does`;
+      else reason = (prof.needW[topPay] ? `Boosts ${LABEL[topPay]}, which your build relies on` : `Always-on ${LABEL[topPay]}, central to your build`);
       if (kind === 'part') {
         const a = data.affixes.find((x) => x.id === id);
-        s += (TIER[a.rarity] || 0) * 0.6;
-        if (!a.rules.some((r) => r.requires.length || r.effects.length)) s += 0.5;  // always-on is reliable
+        s += (TIER[a.rarity] || 0) * 0.4;
+        if (!t.needs.size) s += 0.5;  // always-on is reliable
         const owned = (build.parts || []).map((p) => data.affixes.find((x) => x.id === p)).find((o) => o && o.family !== null && o.family === a.family);
-        if (owned && a.tier > owned.tier) { s += 2; why.push({ v: 2, text: `Higher tier of your ${owned.name}` }); }
+        if (owned && a.tier > owned.tier && pay > 0) { s += 2; reason = `Higher tier of your ${owned.name}`; }
       }
-      why.sort((x, y) => y.v - x.v);
-      return { score: s, reason: why.length ? why[0].text : 'General-purpose pick' };
+      return { score: s, reason, pay, trig };
     }
+    // Below this an offer isn't a real fit, so nothing is called "Best fit".
+    const MIN_FIT = 5;
 
     // Upgrades follow the game's own per-style upgrade priority, spread across slots as levels rise.
     function scoreUpgrade(slot, build) {
@@ -1062,7 +1078,7 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
       const tot = Object.values(w).reduce((a, b) => a + b, 0) || 1;
       return Object.entries(w).sort((a, b) => b[1] - a[1]).slice(0, n).map(([m, v]) => ({ id: m, label: LABEL[m], share: v / tot }));
     }
-    return { tagsOf, profile, score, scoreUpgrade, focus, LABEL };
+    return { tagsOf, profile, score, scoreUpgrade, focus, LABEL, MIN_FIT };
   }
 
   const api = { make };
@@ -1083,7 +1099,8 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
     const rated = ids.map((id) => ({ id, ...(kind === 'upgrade' ? SY.scoreUpgrade(id, b) : SY.score(kind, id, b, prof)) }));
     const best = Math.max(...rated.map((r) => r.score), 0);
     for (const r of rated) {
-      const label = best > 0 && r.score === best ? 'Best fit' : best > 0 && r.score >= best * 0.8 ? 'Good fit' : '';
+      const floor = kind === 'upgrade' ? 0 : SY.MIN_FIT;
+      const label = best > floor && r.score === best ? 'Best fit' : best > floor && r.score >= best * 0.8 && r.score >= floor ? 'Good fit' : '';
       FIT[`${kind}:${r.id}`] = { label, reason: r.reason };
     }
   }
@@ -1394,7 +1411,7 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
     const card = o.kind === 'part' ? (id) => partCard(id, `data-reward="${id}" aria-disabled="${off}"`) : o.kind === 'ability' ? (id) => abilityCard(id, `data-reward="${id}" aria-disabled="${off}"`) : (id) => upgradeCard(id, `data-reward="${id}"`);
     return `<h3 id="stage-title">${esc(planet().name)}: ${esc(q.title)}</h3>
       <div class="queue">${S.queue.map((x, i) => `<div class="qitem ${i ? '' : 'now'}"><span>${esc(x.title)}</span><span class="hint">${esc(x.note)}</span></div>`).join('')}</div>
-      <p class="lead">Choose one.</p>${fullNote(o.kind)}
+      <p class="lead">Choose one.${o.kind !== 'upgrade' && !o.ids.some((id) => (FIT[`${o.kind}:${id}`] || {}).label) ? ' None of these really fit your build; take the strongest on its own merits, or the credits.' : ''}</p>${fullNote(o.kind)}
       <div class="choices">${o.ids.map(card).join('')}</div>
       <div class="row">${o.skip ? `<button class="btn" type="button" id="skip">Skip for ${cr(o.skip)}</button>` : (q.kind === 'upgrade' && !q.skippable ? '' : '<button class="btn" type="button" id="skip">Skip</button>')}</div>`;
   }
