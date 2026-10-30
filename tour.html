@@ -712,7 +712,7 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
         <div id="stage"></div>
       </section>
       <section class="notes">
-        <p><b>Straight from the game files:</b> the three backers and their 18 contracts with credits per unit, form scoring (points per finishing position and per won bet), the bottom 3 being labelled Underdog and the Underdog bonus, the six planets and their order, each planet's shop and reward odds by rarity, every price (parts, abilities, upgrades, packs, rerolls), credits per race and placing, the three risk bets, shop sizes (4 parts, 3 upgrades) and the 33.3% chance a part comes from a family you already own.</p>
+        <p><b>Straight from the game files:</b> the three backers and their 18 contracts with credits per unit, form scoring (points per finishing position and per won bet), the bottom 3 being labelled Underdog and the Underdog bonus, the six planets and their order, each planet's shop and reward odds by rarity, every price (parts, abilities, upgrades, packs, rerolls), credits per race and placing, the three risk bets, shop size (4 parts) and the 33.3% chance a part comes from a family you already own.</p>
         <p><b>Assumed, because the game keeps it in code:</b> how many options each reward or pack shows, how much an upgrade adds, that reroll prices reset at each shop, that a contract pays its rate for every unit you achieve (targets are shown as the game's starting goal), and the other 11 racers: each gets a hidden strength at the start of the tour and finishes by that strength plus a little variation each race, so a strong racer stays near the front. If the game labels you differently, use the Underdog switch on the bet screen. Change the first two under "Assumptions" when you start a run.</p>
         <p><b>Recommendations:</b> every part, ability and trait is tagged from its game rules: what it triggers on (a takedown, Redlining, Surging…) and what it gives (a condition, fuel, energy, a stat). An offer scores higher when it shares your build's focus, gives something your build triggers on, or triggers on something your build produces. Upgrades follow your racer style's own upgrade priority from the game files. It's a guide, not a solver.</p>
         <p>Fan-made tool. Not affiliated with or endorsed by Lucasfilm, Electronic Arts or the game's developers.</p>
@@ -1309,7 +1309,7 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
     setRand();
     const p = planet();
     S.phase = 'shop';
-    S.shop = { rerolls: 0, partPacks: 0, abilityPacks: 0, sold: [], parts: rollParts(p.shop, T.shop.parts), upgrades: rollUpgrades(T.shop.upgrades), pack: null };
+    S.shop = { rerolls: 0, partPacks: 0, abilityPacks: 0, sold: [], parts: rollParts(p.shop, T.shop.parts), upgrades: [], pack: null };  // shop sells parts and packs; upgrades come from racing
   }
   const rerollPrice = () => T.prices.reroll + T.prices.rerollIncrease * S.shop.rerolls;
   const partPackPrice = () => T.prices.partPack + T.prices.partPackIncrease * S.shop.partPacks;
@@ -1318,7 +1318,7 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
   function reroll() {
     const cost = rerollPrice(); if (S.credits < cost) return toast(`A reroll costs ${cr(cost)}.`);
     spend(cost, `Rerolled the shop`); S.shop.rerolls++; setRand();
-    S.shop.parts = rollParts(planet().shop, T.shop.parts); S.shop.upgrades = rollUpgrades(T.shop.upgrades); S.shop.sold = [];
+    S.shop.parts = rollParts(planet().shop, T.shop.parts); S.shop.sold = [];
   }
   function buyPart(id) {
     const cost = T.prices.part[partTier(partById[id])]; if (S.credits < cost) return toast(`You need ${cr(cost)}.`);
@@ -1328,17 +1328,18 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
     const cost = upgradePrice(slot); if (S.credits < cost) return toast(`You need ${cr(cost)}.`);
     if (S.levels[slot] >= MAX_LV) return; spend(cost, `Bought ${slotById[slot].name} upgrade`); applyUpgrade(slot); S.shop.sold.push('up:' + slot);
   }
+  // The 1,500 cr pack (the game's PartPack price; "vehicle part" = stat upgrade) is the Upgrade Pack: pick a stat upgrade.
   function openPack(kind) {
-    const cost = kind === 'part' ? partPackPrice() : abilityPackPrice(); if (S.credits < cost) return toast(`That pack costs ${cr(cost)}.`);
+    const cost = kind === 'stat' ? partPackPrice() : abilityPackPrice(); if (S.credits < cost) return toast(`That pack costs ${cr(cost)}.`);
     setRand();
-    const ids = kind === 'part' ? rollParts(planet().shop, S.options) : rollAbilities(planet().shop, S.options);
-    if (!ids.length) return toast('Nothing left to roll in that pack.');
-    spend(cost, `Opened ${kind === 'part' ? 'a Part Pack' : 'an Ability Pack'}`);
-    if (kind === 'part') S.shop.partPacks++; else S.shop.abilityPacks++;
+    const ids = kind === 'stat' ? rollUpgrades(S.options) : rollAbilities(planet().shop, S.options);
+    if (!ids.length) return toast(kind === 'stat' ? 'Every stat is already maxed.' : 'Nothing left to roll in that pack.');
+    spend(cost, `Opened ${kind === 'stat' ? 'an Upgrade Pack' : 'an Ability Pack'}`);
+    if (kind === 'stat') S.shop.partPacks++; else S.shop.abilityPacks++;
     S.shop.pack = { kind, ids };
   }
   function takePack(id) {
-    if (S.shop.pack.kind === 'part') { if (!addPart(id)) return; log(`Pack: ${partById[id].name}`, 0); }
+    if (S.shop.pack.kind === 'stat') applyUpgrade(id, 'Upgrade Pack: ');
     else { if (!addAbility(id)) return; log(`Pack: ${abilityById[id].name}`, 0); }
     S.shop.pack = null;
   }
@@ -1418,20 +1419,17 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
   function renderShop() {
     const sh = S.shop, last = S.planet >= T.planets.length - 1;
     FIT = {};
-    rate('upgrade', sh.upgrades.filter((id) => !sh.sold.includes('up:' + id) && S.levels[id] < MAX_LV));
     rate('part', sh.parts.filter((id) => !sh.sold.includes(id)));
-    if (sh.pack) rate(sh.pack.kind, sh.pack.ids);
+    if (sh.pack) rate(sh.pack.kind === 'stat' ? 'upgrade' : sh.pack.kind, sh.pack.ids);
     const sold = (k) => sh.sold.includes(k);
-    const packOff = sh.pack && sh.pack.kind === 'part' && partsFull();
     const abOff = (id) => abilitiesFull() && !isUpgrade(id);
-    const pack = sh.pack ? `<h2>Pack: choose one</h2>${fullNote(sh.pack.kind)}<div class="choices">${sh.pack.ids.map((id) => sh.pack.kind === 'part' ? partCard(id, `data-pack="${id}" aria-disabled="${packOff}"`) : abilityCard(id, `data-pack="${id}" aria-disabled="${abOff(id)}"`)).join('')}</div>` : '';
+    const pack = sh.pack ? `<h2>${sh.pack.kind === 'stat' ? 'Upgrade Pack' : 'Ability Pack'}: choose one</h2>${fullNote(sh.pack.kind)}<div class="choices">${sh.pack.ids.map((id) => sh.pack.kind === 'stat' ? upgradeCard(id, `data-pack="${id}"`) : abilityCard(id, `data-pack="${id}" aria-disabled="${abOff(id)}"`)).join('')}</div>` : '';
     return `<h3 id="stage-title">${esc(planet().name)}: shop</h3>
       <p class="lead">Spend credits, reroll the offers, or move on. Rerolls get ${cr(T.prices.rerollIncrease)} pricier each time; packs ${cr(T.prices.partPackIncrease)} each time you open one.</p>
       ${pack}
-      <h2>Upgrades</h2><div class="choices">${sh.upgrades.map((id) => upgradeCard(id, `data-buy-up="${id}" aria-disabled="${sold('up:' + id) || S.levels[id] >= MAX_LV}"`, `<span class="price">${sold('up:' + id) ? 'Sold' : cr(upgradePrice(id))}</span>`)).join('') || '<p class="empty">Every slot is maxed.</p>'}</div>
-      <h2>Parts</h2><div class="choices">${sh.parts.map((id) => partCard(id, `data-buy-part="${id}" aria-disabled="${sold(id) || partsFull()}"`, `<span class="price">${sold(id) ? 'Sold' : cr(T.prices.part[partTier(partById[id])])}</span>`)).join('') || '<p class="empty">No parts left to offer.</p>'}</div>
+      <h2>Part Pack</h2><p class="hint">Pick from these ${T.shop.parts} parts.</p><div class="choices">${sh.parts.map((id) => partCard(id, `data-buy-part="${id}" aria-disabled="${sold(id) || partsFull()}"`, `<span class="price">${sold(id) ? 'Sold' : cr(T.prices.part[partTier(partById[id])])}</span>`)).join('') || '<p class="empty">No parts left to offer.</p>'}</div>
       <h2>Packs</h2><div class="choices">
-        <button class="choice" type="button" data-pack-open="part" aria-disabled="${!!sh.pack}"><b>Part Pack</b><span class="ds">Choose one of ${S.options} parts</span><span class="price">${cr(partPackPrice())}</span></button>
+        <button class="choice" type="button" data-pack-open="stat" aria-disabled="${!!sh.pack}"><b>Upgrade Pack</b><span class="ds">Choose one of ${S.options} stat upgrades</span><span class="price">${cr(partPackPrice())}</span></button>
         <button class="choice" type="button" data-pack-open="ability" aria-disabled="${!!sh.pack}"><b>Ability Pack</b><span class="ds">Choose one of ${S.options} abilities</span><span class="price">${cr(abilityPackPrice())}</span></button>
       </div>
       <div class="row"><button class="btn" type="button" id="reroll" ${sh.pack ? 'disabled' : ''}>Reroll offers (${cr(rerollPrice())})</button><button class="btn primary" type="button" id="leave" ${sh.pack ? 'disabled' : ''}>${last ? 'Finish the tour' : `Leave for ${esc(T.planets[S.planet + 1].name)}`}</button></div>`;
