@@ -118,6 +118,12 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
 .underdog b { font: 600 15px var(--display); }
 .underdog label { display: flex; gap: 8px; align-items: center; color: var(--fg); font-size: 13px; }
 .underdog input { accent-color: var(--cond); }
+.field { width: 100%; border-collapse: collapse; font: 12.5px/1.4 var(--mono); font-variant-numeric: tabular-nums; }
+.field th, .field td { padding: 4px 6px; text-align: left; border-top: 1px solid var(--line); }
+.field th { color: var(--muted); font-weight: 500; border-top: 0; }
+.field td.n { text-align: right; }
+.field tr.you td { color: var(--accent); font-weight: 600; }
+.field tr.dog td:first-child::after { content: " · Underdog"; color: var(--cond); font-weight: 500; }
 .assume { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 13px; }
 .assume select { font: 13px var(--body); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
 .ico { flex: none; display: inline-block; width: 32px; height: 32px; background: var(--src) center / contain no-repeat; border-radius: 4px; }
@@ -700,7 +706,7 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
       </section>
       <section class="notes">
         <p><b>Straight from the game files:</b> the three backers and their 18 contracts with credits per unit, form scoring (points per finishing position and per won bet), the bottom 3 being labelled Underdog and the Underdog bonus, the six planets and their order, each planet's shop and reward odds by rarity, every price (parts, abilities, upgrades, packs, rerolls), credits per race and placing, the three risk bets, shop sizes (4 parts, 3 upgrades) and the 33.3% chance a part comes from a family you already own.</p>
-        <p><b>Assumed, because the game keeps it in code:</b> how many options each reward or pack shows, how much an upgrade adds, that reroll prices reset at each shop, that a contract pays its rate for every unit you achieve (targets are shown as the game's starting goal), and the other 11 racers' form: they take the positions you didn't, at random. If the game labels you differently, use the Underdog switch on the bet screen. Change the first two under "Assumptions" when you start a run.</p>
+        <p><b>Assumed, because the game keeps it in code:</b> how many options each reward or pack shows, how much an upgrade adds, that reroll prices reset at each shop, that a contract pays its rate for every unit you achieve (targets are shown as the game's starting goal), and the other 11 racers: each gets a hidden strength at the start of the tour and finishes by that strength plus a little variation each race, so a strong racer stays near the front. If the game labels you differently, use the Underdog switch on the bet screen. Change the first two under "Assumptions" when you start a run.</p>
         <p>Fan-made tool. Not affiliated with or endorsed by Lucasfilm, Electronic Arts or the game's developers.</p>
       </section>
     </div>
@@ -716,6 +722,10 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
         <div class="sec-head"><h2 id="h-gear">Abilities & parts</h2><span class="hint" id="gear-hint"></span></div>
         <div class="owned" id="owned"></div>
         <div class="row"><button class="btn" type="button" id="copy-build">Open this build in the planner</button><span class="toast" id="toast" role="status"></span></div>
+      </section>
+      <section class="card" aria-labelledby="h-field" id="field-card" hidden>
+        <div class="sec-head"><h2 id="h-field">Field standings</h2><span class="hint">Ranked by form</span></div>
+        <div class="tbl"><table class="field" id="field"></table></div>
       </section>
       <section class="card" aria-labelledby="h-log">
         <div class="sec-head"><h2 id="h-log">Run log</h2></div>
@@ -955,8 +965,9 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
       phase: 'bet', planet: 0, credits: T.prices.startingCredits, earned: 0, spent: 0, rolls: 0,
       levels: Object.fromEntries(D.slots.map((s) => [s.id, 0])), parts: [], abilities: [...st.abilities],
       bet: null, finish: null, queue: [], offer: null, shop: null, log: [],
-      form: { you: 0, field: Array(11).fill(0) }, underdogOverride: null,
+      form: { you: 0, field: Array(11).fill(0) }, underdogOverride: null, racers: null,
     });
+    setRand(); S.racers = makeRacers();
     log(`Tour starts with ${st.name} in a ${D.vehicles.find((v) => v.id === S.vehicle).name}`, 0);
     rollBackers();
   }
@@ -1027,6 +1038,14 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
   }
   const contractOf = (o) => T.backers[o.b].contracts[o.c];
   // You're an Underdog when your form score is among the lowest NumOfRacersToLabelAsUnderdogs (AI included).
+  // Each simulated racer has a hidden strength (0–10). A race result is strength plus a small random swing,
+  // so placings stay consistent: the strongest racer mostly finishes near the front, a weak one near the back.
+  const SWING = 1.3;
+  const gauss = () => { let u = 0, v = 0; while (!u) u = rand(); while (!v) v = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  function makeRacers() {
+    return Array.from({ length: 11 }, (_, i) => ({ name: `Racer ${i + 1}`, strength: Math.round(rand() * 100) / 10, finishes: [] }));
+  }
+  const tierOf = (x) => (x >= 7.5 ? 'Front-runner' : x >= 4.5 ? 'Midfield' : x >= 2 ? 'Back' : 'Backmarker');
   function formRank() {
     const f = S.form || { you: 0, field: [] };
     const below = f.field.filter((x) => x < f.you).length, tiedOrBelow = f.field.filter((x) => x <= f.you).length;
@@ -1054,12 +1073,17 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
       credit(p.underdogCredits, 'Underdog Performance');
       S.queue.push({ kind: 'upgrade', title: 'Underdog reward', note: 'Choose an upgrade, or skip', skippable: T.form.reward.skippable });
     }
-    // form: your finish and won bet; the other 11 racers take the remaining positions at random
+    // form: your finish and won bet; the other 11 racers fill the remaining positions by strength + swing
     S.form = S.form || { you: 0, field: Array(11).fill(0) };
+    S.racers = S.racers || makeRacers();
     S.form.you += T.form.positionScore[pos - 1] + (won ? T.form.betScore[bet.id] || 0 : 0);
-    const others = Array.from({ length: 12 }, (_, i) => i + 1).filter((n) => n !== pos);
-    for (let i = others.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [others[i], others[j]] = [others[j], others[i]]; }
-    S.form.field = S.form.field.map((x, i) => x + T.form.positionScore[others[i] - 1]);
+    const open = Array.from({ length: 12 }, (_, i) => i + 1).filter((n) => n !== pos);
+    const order = S.racers.map((r, i) => ({ i, perf: r.strength + gauss() * SWING })).sort((a, b) => b.perf - a.perf);
+    order.forEach((o, k) => {
+      const place = open[k];
+      S.racers[o.i].finishes.push(place);
+      S.form.field[o.i] += T.form.positionScore[place - 1];
+    });
     if (won) S.queue.push({ kind: 'betPart', title: `${bet.name} bet won`, note: `Parts, one guaranteed ${bet.minRarity}+, or skip for ${cr(bet.skipCredits)}`, bet: bet.id });
     else log(`${bet.name} bet lost (needed P${bet.minFinish} or better)`, 0);
     // Abilities are shop-only in Multiplayer Tour, so the planet reward only ever rolls upgrades.
@@ -1255,6 +1279,15 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
     $('owned').innerHTML = (b.abilities.map((id, i) => abilityById[id] ? `<div class="own">${ico(abilityById[id].icon, 'sm')}<span>${esc(abilityById[id].name)}</span>${built ? `<button class="btn" type="button" data-rm-ab="${i}" aria-label="Remove ${esc(abilityById[id].name)}">Remove</button>` : ''}</div>` : '').join('')
       + b.parts.map((id, i) => partById[id] ? `<div class="own" style="--rc:${rc(partTier(partById[id]))}">${ico(partById[id].icon, 'sm')}<span>${esc(partById[id].name)} <span class="tag">${esc(partById[id].rarity)}</span></span>${built ? `<button class="btn" type="button" data-rm-pt="${i}" aria-label="Remove ${esc(partById[id].name)}">Remove</button>` : ''}</div>` : '').join(''))
       || '<p class="empty">Nothing yet.</p>';
+    const fc = $('field-card');
+    fc.hidden = !built || !S.racers;
+    if (!fc.hidden) {
+      const rows = [{ you: true, name: 'You', form: S.form.you, last: (S.log.find((l) => /^Finished P/.test(l.text)) || {}).text }]
+        .concat(S.racers.map((r, i) => ({ name: r.name, tier: tierOf(r.strength), form: S.form.field[i], finishes: r.finishes })))
+        .sort((a, b) => b.form - a.form);
+      rows.forEach((r, k) => { r.rank = k + 1; r.dog = S.planet > 0 && k >= rows.length - T.form.underdogs; });
+      $('field').innerHTML = `<thead><tr><th>Racer</th><th>Type</th><th>Finishes</th><th class="n">Form</th></tr></thead><tbody>${rows.map((r) => `<tr class="${r.you ? 'you' : ''} ${r.dog ? 'dog' : ''}"><td>${esc(r.name)}</td><td>${r.you ? '' : esc(r.tier)}</td><td>${r.you ? esc((S.log.filter((l) => /^Finished P/.test(l.text)).map((l) => l.text.match(/P(\d+)/)[1]).reverse()).join(' ')) : esc(r.finishes.join(' '))}</td><td class="n">${r.form}</td></tr>`).join('')}</tbody>`;
+    }
     $('log').innerHTML = (S.log || []).map((l) => `<div><span class="hint">Planet ${l.p}</span><span>${esc(l.text)}</span><span class="amt ${l.amount > 0 ? 'up' : l.amount < 0 ? 'down' : ''}">${l.amount ? `${l.amount > 0 ? '+' : '−'}${Math.abs(l.amount).toLocaleString()}` : ''}</span></div>`).join('') || '<p class="empty">The run log fills in as you race.</p>';
   }
   function render() {
@@ -1318,7 +1351,7 @@ section.card { background: var(--panel); border: 1px solid var(--line); border-r
     save();
   });
   // read-only hook for checking roll odds from the console
-  window.SWGRTour = { rollAbilities: (planetIndex, n) => rollAbilities(T.planets[planetIndex].shop, n), parentOf: (id) => ABILITY_PARENT[id], levelOf: (id) => abilityById[id].level, rollParts: (planetIndex, n, minTier) => rollParts(T.planets[planetIndex].shop, n, minTier), rollBetReward: (planetIndex, n, minTier) => rollBetReward(T.planets[planetIndex].reward, n, minTier), tierOf: (id) => partTier(partById[id]), state: () => S };
+  window.SWGRTour = { racers: () => S.racers, rollAbilities: (planetIndex, n) => rollAbilities(T.planets[planetIndex].shop, n), parentOf: (id) => ABILITY_PARENT[id], levelOf: (id) => abilityById[id].level, rollParts: (planetIndex, n, minTier) => rollParts(T.planets[planetIndex].shop, n, minTier), rollBetReward: (planetIndex, n, minTier) => rollBetReward(T.planets[planetIndex].reward, n, minTier), tierOf: (id) => partTier(partById[id]), state: () => S };
   if (window.top === window && /^https?:$/.test(location.protocol)) $('to-planner').hidden = false;
   else $('copy-build').textContent = 'Copy build code for the planner';
   $('build').textContent = D.meta.build;
