@@ -1184,18 +1184,23 @@ button.pip:focus-visible { outline: 2px solid var(--mustard); outline-offset: -1
 
   // ---- rolling ---------------------------------------------------------------------------------------
   const owned = (id) => S.parts.includes(id);
+  // A build holds one rarity per part family. Owning a part keeps its own and lower rarities out of offers;
+  // a higher rarity can still appear, and taking it replaces the owned part in the same slot.
+  const ownedSlotOf = (a) => (a && a.family !== null ? S.parts.findIndex((id) => partById[id] && partById[id].family === a.family) : -1);
+  const replaces = (id) => { const i = ownedSlotOf(partById[id]); return i >= 0 && RANK.indexOf(partTier(partById[id])) > RANK.indexOf(partTier(partById[S.parts[i]])); };
+  const offerable = (id) => !!partById[id] && !owned(id) && (ownedSlotOf(partById[id]) < 0 || replaces(id));
   function rollPart(pool, minTier, exclude) {
     // 33.3%: offer the next tier of a part family you already own, when there is one
     if (rand() * 100 < T.familyChance) {
       const next = S.parts.map((id) => partById[id]).filter((a) => a && a.family !== null)
         .map((a) => D.affixes.find((b) => b.family === a.family && b.tier === a.tier + 1))
-        .filter((b) => b && !owned(b.id) && !exclude.has(b.id) && RANK.indexOf(partTier(b)) >= RANK.indexOf(minTier));
+        .filter((b) => b && offerable(b.id) && !exclude.has(b.id) && RANK.indexOf(partTier(b)) >= RANK.indexOf(minTier));
       if (next.length) return pickOne(next).id;
     }
     const groups = pool.parts.filter((g) => RANK.indexOf(g.group) >= RANK.indexOf(minTier) && (T.partGroups[g.group] || []).length);
     for (let tries = 0; tries < 20; tries++) {
       const g = pickWeighted(groups, (x) => x.weight) || groups[groups.length - 1];
-      const cand = (T.partGroups[g.group] || []).filter((id) => partById[id] && !owned(id) && !exclude.has(id));
+      const cand = (T.partGroups[g.group] || []).filter((id) => offerable(id) && !exclude.has(id));
       if (cand.length) return pickOne(cand);
     }
     return null;
@@ -1324,7 +1329,12 @@ button.pip:focus-visible { outline: 2px solid var(--mustard); outline-offset: -1
     S.levels[slot] = Math.min(MAX_LV, before + S.upgradeSize);
     log(`${prefix}${slotById[slot].name} ${before} → ${S.levels[slot]}`, 0);
   }
-  function addPart(id) { if (S.parts.length >= MAX_PARTS) { toast(`All ${MAX_PARTS} part slots are full.`); return false; } S.parts.push(id); return true; }
+  function addPart(id) {
+    // a higher rarity of a part you own is an upgrade: it takes the owned part's slot
+    if (replaces(id)) { const i = ownedSlotOf(partById[id]); log(`Upgraded ${partById[S.parts[i]].name} to ${partById[id].name}`, 0); S.parts[i] = id; return true; }
+    if (S.parts.length >= MAX_PARTS) { toast(`All ${MAX_PARTS} part slots are full.`); return false; }
+    S.parts.push(id); return true;
+  }
   function addAbility(id) {
     const parent = ABILITY_PARENT[id], at = S.abilities.indexOf(parent);
     if (parent && at >= 0) { S.abilities[at] = id; log(`Upgraded ${abilityById[parent].name} → ${abilityById[id].name}`, 0); return true; }
@@ -1391,7 +1401,7 @@ button.pip:focus-visible { outline: 2px solid var(--mustard); outline-offset: -1
 
   // ---- rendering -------------------------------------------------------------------------------------
   const toast = (msg) => { $('toast').textContent = msg; clearTimeout(toast.t); toast.t = setTimeout(() => { $('toast').textContent = ''; }, 3500); };
-  const partCard = (id, attrs, extra = '') => { const a = partById[id]; return `<button class="choice${fitCls('part', id)}" type="button" ${attrs} style="--rc:${rc(partTier(a))}"><span class="top">${ico(a.icon)}<b>${esc(a.name)}</b></span><span class="row">${fitTag('part', id)}<span class="tag">${esc(a.rarity)}</span>${isConditional(a) ? '<span class="tag cond">Situational</span>' : ''}${extra}</span><span class="ds">${esc(a.desc)}</span>${fitWhy('part', id)}</button>`; };
+  const partCard = (id, attrs, extra = '') => { const a = partById[id]; return `<button class="choice${fitCls('part', id)}" type="button" ${attrs} style="--rc:${rc(partTier(a))}"><span class="top">${ico(a.icon)}<b>${esc(a.name)}</b></span><span class="row">${fitTag('part', id)}<span class="tag">${esc(a.rarity)}</span>${isConditional(a) ? '<span class="tag cond">Situational</span>' : ''}${replaces(id) ? `<span class="tag good">Upgrades ${esc(partById[S.parts[ownedSlotOf(a)]].name)}</span>` : ''}${extra}</span><span class="ds">${esc(a.desc)}</span>${fitWhy('part', id)}</button>`; };
   const abilityCard = (id, attrs, extra = '') => { const a = abilityById[id]; return `<button class="choice${fitCls('ability', id)}" type="button" ${attrs}><span class="top">${ico(a.icon)}<b>${esc(a.name)}</b></span><span class="row">${fitTag('ability', id)}<span class="tag">${esc(a.level.replace('Level', 'Lv '))}</span>${isUpgrade(id) ? `<span class="tag cond">Upgrades ${esc(abilityById[ABILITY_PARENT[id]].name)}</span>` : '<span class="tag">New</span>'}${extra}</span><span class="ds">${esc(a.desc)}</span>${fitWhy('ability', id)}</button>`; };
   const upgradeCard = (slot, attrs, extra = '') => { const s = slotById[slot], lv = S.levels[slot], to = Math.min(MAX_LV, lv + S.upgradeSize); return `<button class="choice${fitCls('upgrade', slot)}" type="button" ${attrs}><span class="top">${ico(s.icon)}<b>${esc(s.name)}</b></span><span class="row">${fitTag('upgrade', slot)}<span class="tag">${lv} → ${to}</span>${extra}</span><span class="ds">${esc(s.part)}</span>${fitWhy('upgrade', slot)}</button>`; };
 
@@ -1438,7 +1448,7 @@ button.pip:focus-visible { outline: 2px solid var(--mustard); outline-offset: -1
     const q = S.queue[0], o = S.offer;
     FIT = {}; rate(o.kind, o.ids);
     const off = (o.kind === 'part' && partsFull()) || (o.kind === 'ability' && abilitiesFull());
-    const card = o.kind === 'part' ? (id) => partCard(id, `data-reward="${id}" aria-disabled="${off}"`) : o.kind === 'ability' ? (id) => abilityCard(id, `data-reward="${id}" aria-disabled="${off}"`) : (id) => upgradeCard(id, `data-reward="${id}"`);
+    const card = o.kind === 'part' ? (id) => partCard(id, `data-reward="${id}" aria-disabled="${off && !replaces(id)}"`) : o.kind === 'ability' ? (id) => abilityCard(id, `data-reward="${id}" aria-disabled="${off}"`) : (id) => upgradeCard(id, `data-reward="${id}"`);
     return `<h3 id="stage-title">${esc(planet().name)}: ${esc(q.title)}</h3>
       <div class="queue">${S.queue.map((x, i) => `<div class="qitem ${i ? '' : 'now'}"><span>${esc(x.title)}</span><span class="hint">${esc(x.note)}</span></div>`).join('')}</div>
       <p class="lead">Choose one.${o.kind !== 'upgrade' && !o.ids.some((id) => (FIT[`${o.kind}:${id}`] || {}).label) ? ' None of these really fit your build; take the strongest on its own merits, or the credits.' : ''}</p>${fullNote(o.kind)}
@@ -1456,7 +1466,7 @@ button.pip:focus-visible { outline: 2px solid var(--mustard); outline-offset: -1
     return `<h3 id="stage-title">${esc(planet().name)}: shop</h3>
       <p class="lead">Spend credits, reroll the offers, or move on. Rerolls get ${cr(T.prices.rerollIncrease)} pricier each time; packs ${cr(T.prices.partPackIncrease)} each time you open one.</p>
       ${pack}
-      <h2>Part Pack</h2><p class="hint">Pick from these ${T.shop.parts} parts.</p><div class="choices">${sh.parts.map((id) => partCard(id, `data-buy-part="${id}" aria-disabled="${sold(id) || partsFull()}"`, `<span class="price">${sold(id) ? 'Sold' : cr(T.prices.part[partTier(partById[id])])}</span>`)).join('') || '<p class="empty">No parts left to offer.</p>'}</div>
+      <h2>Part Pack</h2><p class="hint">Pick from these ${T.shop.parts} parts.</p><div class="choices">${sh.parts.map((id) => partCard(id, `data-buy-part="${id}" aria-disabled="${sold(id) || (partsFull() && !replaces(id))}"`, `<span class="price">${sold(id) ? 'Sold' : cr(T.prices.part[partTier(partById[id])])}</span>`)).join('') || '<p class="empty">No parts left to offer.</p>'}</div>
       <h2>Packs</h2><div class="choices">
         <button class="choice" type="button" data-pack-open="stat" aria-disabled="${!!sh.pack}"><b>Upgrade Pack</b><span class="ds">Choose one of ${S.options} stat upgrades</span><span class="price">${cr(partPackPrice())}</span></button>
         <button class="choice" type="button" data-pack-open="ability" aria-disabled="${!!sh.pack}"><b>Ability Pack</b><span class="ds">Choose one of ${S.options} abilities</span><span class="price">${cr(abilityPackPrice())}</span></button>
@@ -1561,7 +1571,7 @@ button.pip:focus-visible { outline: 2px solid var(--mustard); outline-offset: -1
     save();
   });
   // read-only hook for checking roll odds from the console
-  window.SWGRTour = { racers: () => S.racers, rollAbilities: (planetIndex, n) => rollAbilities(T.planets[planetIndex].shop, n), parentOf: (id) => ABILITY_PARENT[id], levelOf: (id) => abilityById[id].level, rollParts: (planetIndex, n, minTier) => rollParts(T.planets[planetIndex].shop, n, minTier), rollBetReward: (planetIndex, n, minTier) => rollBetReward(T.planets[planetIndex].reward, n, minTier), tierOf: (id) => partTier(partById[id]), state: () => S };
+  window.SWGRTour = { racers: () => S.racers, rollAbilities: (planetIndex, n) => rollAbilities(T.planets[planetIndex].shop, n), parentOf: (id) => ABILITY_PARENT[id], levelOf: (id) => abilityById[id].level, rollParts: (planetIndex, n, minTier) => rollParts(T.planets[planetIndex].shop, n, minTier), rollBetReward: (planetIndex, n, minTier) => rollBetReward(T.planets[planetIndex].reward, n, minTier), tierOf: (id) => partTier(partById[id]), addPart: (id) => addPart(id), state: () => S };
   if (window.top === window && /^https?:$/.test(location.protocol)) $('to-planner').hidden = false;
   else $('copy-build').textContent = 'Copy build code for the planner';
   $('build').textContent = D.meta.build;
